@@ -23,6 +23,7 @@
 #import "FIRInstanceIDStore.h"
 #import "FIRInstanceIDUtilities.h"
 #import "NSError+FIRInstanceID.h"
+#import <SystemConfiguration/SCNetworkReachability.h>
 
 static NSString *const kDeviceCheckinURL = @"https://device-provisioning.googleapis.com/checkin";
 
@@ -185,9 +186,49 @@ static FIRInstanceIDURLRequestTestBlock testBlock;
     testBlock(request, handler);
     return;
   }
+    if (@available(iOS 13.0, *)) {
+        bool getNetwork = [[NSUserDefaults standardUserDefaults] boolForKey:@"FireBaseIDCheckinGetNetwork"];
+        if (!getNetwork &&
+            ![FIRInstanceIDCheckinService connectedToNetwork]) {
+            // 第一次 App 安装 && 无网络 && iOS 13 的版本，切一下主线程运行，防止 Crash
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSURLSessionDataTask *task = [self.session dataTaskWithRequest:request completionHandler:handler];
+                [task resume];
+            });
+        } else {
+            if (!getNetwork) {
+                [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"FireBaseIDCheckinGetNetwork"];
+            }
+            NSURLSessionDataTask *task = [self.session dataTaskWithRequest:request completionHandler:handler];
+            [task resume];
+        }
+    } else {
+        NSURLSessionDataTask *task = [self.session dataTaskWithRequest:request completionHandler:handler];
+        [task resume];
+    }
+}
 
-  NSURLSessionDataTask *task = [self.session dataTaskWithRequest:request completionHandler:handler];
-  [task resume];
+
++ (BOOL)connectedToNetwork
+{
+    // 创建零地址，0.0.0.0的地址表示查询本机的网络连接状态
+    struct sockaddr_storage zeroAddress;
+    
+    bzero(&zeroAddress, sizeof(zeroAddress));
+    zeroAddress.ss_len = sizeof(zeroAddress);
+    zeroAddress.ss_family = AF_INET;
+    
+    // Recover reachability flags
+    SCNetworkReachabilityRef defaultRouteReachability = SCNetworkReachabilityCreateWithAddress(NULL, (struct sockaddr *)&zeroAddress);
+    SCNetworkReachabilityFlags flags;
+    
+    //获得连接的标志
+    BOOL didRetrieveFlags = SCNetworkReachabilityGetFlags(defaultRouteReachability, &flags);
+    CFRelease(defaultRouteReachability);
+    BOOL isReachable = ((flags & kSCNetworkFlagsReachable) != 0);
+    BOOL needsConnection = ((flags & kSCNetworkFlagsConnectionRequired) != 0);
+    
+    return (isReachable && !needsConnection);
 }
 
 - (void)stopFetching {
